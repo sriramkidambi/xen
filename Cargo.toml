@@ -1,0 +1,53 @@
+[package]
+name = "xen"
+version = "0.3.0"
+edition = "2024"
+description = "Unified configuration manager for AI coding assistants (Claude Code, OpenCode, Goose, AMP Code)"
+license = "MIT"
+readme = "README.md"
+keywords = ["ai", "cli", "configuration", "tui", "mcp"]
+categories = ["command-line-utilities", "config", "development-tools"]
+authors = ["d0"]
+
+[dependencies]
+harness-locate = { git = "https://github.com/neiii/harness-barn", branch = "master" }
+skills-locate = { git = "https://github.com/neiii/harness-barn", branch = "master" }
+
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+dialoguer-multiselect = "0.13.2"
+
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Error handling
+thiserror = "2.0"
+color-eyre = "0.6"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+textwrap = "0.16"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+colored = "3.0.0"
+
+[features]
+default = []
+tui-cards = []
+
+[dev-dependencies]
+tempfile = "3.24.0"
+assert_cmd = "2.0"
+predicates = "3.1"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
