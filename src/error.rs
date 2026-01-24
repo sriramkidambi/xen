@@ -75,4 +75,8 @@ pub enum Error {
     /// YAML parsing error.
     #[error(transparent)]
     Yaml(#[from] serde_yaml::Error),
+
+    /// Dialoguer error (interactive prompts).
+    #[error(transparent)]
+    Dialoguer(#[from] dialoguer::Error),
 }

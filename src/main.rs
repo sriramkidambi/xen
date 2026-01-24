@@ -40,8 +40,11 @@ fn main() -> color_eyre::Result<()> {
                 harness,
                 name,
                 from_current,
+                interactive,
             } => {
-                if from_current {
+                if interactive {
+                    cli::profile::create_profile_interactive(&harness, &name)?
+                } else if from_current {
                     cli::profile::create_profile_from_current(&harness, &name)?
                 } else {
                     cli::profile::create_profile(&harness, &name)?

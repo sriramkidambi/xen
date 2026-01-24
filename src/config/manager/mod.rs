@@ -167,6 +167,48 @@ impl ProfileManager {
         Ok(profile_path)
     }
 
+    /// Creates a profile by copying from another existing profile.
+    ///
+    /// This copies the base config files and resource directories (skills, agents, commands, plugins)
+    /// from the source profile to the new profile.
+    ///
+    /// # Errors
+    /// Returns [`Error::ProfileNotFound`] if source profile doesn't exist,
+    /// or [`Error::ProfileExists`] if target profile already exists.
+    pub fn create_from_profile_with_resources(
+        &self,
+        harness: &Harness,
+        source_name: &ProfileName,
+        target_name: &ProfileName,
+    ) -> Result<PathBuf> {
+        let source_path = self.profile_path(harness, source_name);
+        let target_path = self.profile_path(harness, target_name);
+
+        if !source_path.exists() {
+            return Err(Error::ProfileNotFound(source_name.as_str().to_string()));
+        }
+
+        if target_path.exists() {
+            return Err(Error::ProfileExists(target_name.as_str().to_string()));
+        }
+
+        // Create the target profile directory
+        std::fs::create_dir_all(&target_path)?;
+
+        // Copy resource directories from source profile
+        files::copy_resource_directories_from(harness, true, &target_path, Some(&source_path))?;
+
+        // Copy config files from source profile (using source profile as base)
+        files::copy_config_files_from_profile(&source_path, &target_path)?;
+
+        if let Ok(mut config) = XenConfig::load() {
+            config.set_active_profile(harness.id(), target_name.as_str());
+            let _ = config.save();
+        }
+
+        Ok(target_path)
+    }
+
     /// Creates a "default" profile from current harness config if it doesn't exist.
     ///
     /// Returns `Ok(true)` if profile was created, `Ok(false)` if it already existed

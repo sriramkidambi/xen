@@ -16,6 +16,7 @@ skills-locate = { git = "https://github.com/neiii/harness-barn", branch = "maste
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
+dialoguer = "0.11"
 dialoguer-multiselect = "0.13.2"
 
 

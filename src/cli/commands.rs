@@ -101,6 +101,9 @@ pub enum ProfileCommands {
         /// Copy current harness config to the new profile.
         #[arg(long)]
         from_current: bool,
+        /// Interactive mode - prompts for authentication method and resource selection.
+        #[arg(long, short)]
+        interactive: bool,
     },
 
     /// Delete a profile.

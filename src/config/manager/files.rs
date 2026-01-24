@@ -443,8 +443,22 @@ pub fn copy_resource_directories(
     to_profile: bool,
     profile_path: &Path,
 ) -> Result<()> {
-    let scope = Scope::Global;
+    copy_resource_directories_from(harness, to_profile, profile_path, None)
+}
 
+/// Copy resource directories from a source profile or harness to a destination profile.
+///
+/// When `source_profile` is Some: copies resources from source profile → destination profile
+/// When `source_profile` is None: copies from harness (if to_profile=true) or to harness (if to_profile=false)
+///
+/// Uses canonical names inside profiles for cross-harness portability.
+pub fn copy_resource_directories_from(
+    harness: &Harness,
+    to_profile: bool,
+    profile_path: &Path,
+    source_profile: Option<&Path>,
+) -> Result<()> {
+    let scope = Scope::Global;
     let resources: Vec<(&str, Option<std::path::PathBuf>)> = vec![
         (
             CANONICAL_COMMANDS_DIR,
@@ -465,28 +479,78 @@ pub fn copy_resource_directories(
     ];
 
     for (canonical_name, harness_path) in resources {
-        let Some(harness_path) = harness_path else {
-            continue;
-        };
-
         let profile_resource = profile_path.join(canonical_name);
 
-        let (src, dst) = if to_profile {
-            (harness_path.as_path(), profile_resource.as_path())
+        let (src, dst, harness_dst_path) = if let Some(source) = source_profile {
+            // Copy from source profile to destination profile
+            let src = source.join(canonical_name);
+            (src, profile_resource.clone(), None)
         } else {
-            (profile_resource.as_path(), harness_path.as_path())
+            // Copy between harness and profile
+            let Some(h_path) = harness_path else {
+                continue;
+            };
+            let profile_resource = profile_path.join(canonical_name);
+
+            let (src, dst) = if to_profile {
+                (h_path.clone(), profile_resource.clone())
+            } else {
+                (profile_resource.clone(), h_path.clone())
+            };
+            (src, dst, Some(h_path.clone()))
         };
 
         if src.exists() && src.is_dir() {
-            let is_skills_to_opencode = !to_profile
-                && canonical_name == CANONICAL_SKILLS_DIR
-                && matches!(harness.kind(), HarnessKind::OpenCode);
+            let is_skills_to_opencode = if let Some(_harness_dst) = harness_dst_path {
+                !to_profile
+                    && canonical_name == CANONICAL_SKILLS_DIR
+                    && matches!(harness.kind(), HarnessKind::OpenCode)
+            } else {
+                // Profile to profile copy - no transformation needed
+                false
+            };
 
             if is_skills_to_opencode {
-                copy_skills_for_opencode(src, dst)?;
+                copy_skills_for_opencode(&src, &dst)?;
             } else {
-                copy_dir_filtered(src, dst)?;
+                copy_dir_filtered(&src, &dst)?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Copy config files from one profile to another.
+/// This copies all files and directories from the source profile to the target profile,
+/// excluding session data like transcripts, debug logs, etc.
+pub fn copy_config_files_from_profile(source_profile: &Path, target_profile: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(source_profile)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+
+        // Skip session data directories
+        if is_session_data(&name_str) {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = target_profile.join(&file_name);
+
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            // Skip resource directories - they're handled by copy_resource_directories
+            if name_str == CANONICAL_SKILLS_DIR
+                || name_str == CANONICAL_AGENTS_DIR
+                || name_str == CANONICAL_COMMANDS_DIR
+                || name_str == CANONICAL_PLUGINS_DIR
+            {
+                continue;
+            }
+            copy_dir_filtered(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&src_path, &dst_path)?;
         }
     }
 
