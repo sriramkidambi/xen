@@ -1,0 +1,456 @@
+use harness_locate::{Harness, HarnessKind, InstallationStatus};
+use serde::Serialize;
+use std::io::IsTerminal;
+
+use crate::cli::output::{ResolvedFormat, output, output_list};
+use crate::config::{XenConfig, ProfileManager, ProfileName};
+use crate::display::{ProfileNode, SectionKind, nodes_to_text, profile_to_nodes};
+use crate::error::{Error, Result};
+use crate::harness::HarnessConfig;
+
+#[derive(Serialize)]
+struct ProfileListEntry {
+    name: String,
+    harness_id: String,
+    is_active: bool,
+}
+
+pub(crate) fn resolve_harness(name: &str) -> Result<Harness> {
+    let kind = match name {
+        "claude-code" | "claude" | "cc" => HarnessKind::ClaudeCode,
+        "opencode" | "oc" => HarnessKind::OpenCode,
+        "goose" => HarnessKind::Goose,
+        "amp-code" | "amp" | "ampcode" => HarnessKind::AmpCode,
+        "copilot-cli" | "copilot" | "ghcp" => HarnessKind::CopilotCli,
+        "crush" => HarnessKind::Crush,
+        _ => return Err(Error::UnknownHarness(name.to_string())),
+    };
+    Ok(Harness::new(kind))
+}
+
+fn get_manager() -> Result<ProfileManager> {
+    let profiles_dir = XenConfig::profiles_dir()?;
+    Ok(ProfileManager::new(profiles_dir))
+}
+
+pub fn list_profiles(harness_name: &str, format: ResolvedFormat) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let manager = get_manager()?;
+
+    let active_profile: Option<String> = XenConfig::load()
+        .ok()
+        .and_then(|c| c.active_profile_for(harness.id()).map(|s| s.to_string()));
+
+    let profiles = manager.list_profiles(&harness)?;
+    let entries: Vec<ProfileListEntry> = profiles
+        .iter()
+        .map(|p| ProfileListEntry {
+            name: p.to_string(),
+            harness_id: harness.id().to_string(),
+            is_active: active_profile
+                .as_ref()
+                .map(|a| a == &p.to_string())
+                .unwrap_or(false),
+        })
+        .collect();
+
+    output_list(&entries, format, |entries| {
+        if entries.is_empty() {
+            println!("No profiles found for {}", harness.id());
+        } else {
+            println!("Profiles for {}:", harness.id());
+            for entry in entries {
+                let active = if entry.is_active { " (active)" } else { "" };
+                println!("  {}{}", entry.name, active);
+            }
+        }
+    });
+    Ok(())
+}
+
+pub fn show_profile(harness_name: &str, profile_name: &str, format: ResolvedFormat) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    let info = manager.show_profile(&harness, &name)?;
+    output(&info, format, |info| print_profile_text(info, &harness));
+    Ok(())
+}
+
+fn print_profile_text(info: &crate::config::ProfileInfo, harness: &harness_locate::Harness) {
+    let mut nodes = profile_to_nodes(info);
+
+    if info.is_active {
+        let marker_exists = harness
+            .config_dir()
+            .ok()
+            .map(|dir| dir.join(format!("XEN_PROFILE_{}", info.name)).exists())
+            .unwrap_or(false);
+        if marker_exists && let Some(header) = nodes.first_mut() {
+            header.children.push(
+                ProfileNode::new(SectionKind::Field, "Marker")
+                    .with_text(format!("XEN_PROFILE_{}", info.name)),
+            );
+        }
+    }
+
+    print!("{}", nodes_to_text(&nodes));
+}
+
+pub fn create_profile(harness_name: &str, profile_name: &str) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+
+    let status = harness
+        .installation_status()
+        .unwrap_or(InstallationStatus::NotInstalled);
+    match status {
+        InstallationStatus::FullyInstalled { .. } => {}
+        _ => {
+            eprintln!("Harness is not installed/configured:\n");
+            let lines = crate::harness::get_empty_state_message(harness.kind(), status, false);
+            for line in lines {
+                eprintln!("{}", line);
+            }
+            return Err(Error::HarnessNotInstalled);
+        }
+    }
+
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    let path = manager.create_profile(&harness, &name)?;
+    println!("Created profile: {}", name.as_str());
+    println!("Path: {}", path.display());
+    Ok(())
+}
+
+pub fn create_profile_from_current(harness_name: &str, profile_name: &str) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+
+    let status = harness
+        .installation_status()
+        .unwrap_or(InstallationStatus::NotInstalled);
+    match status {
+        InstallationStatus::FullyInstalled { .. } => {}
+        _ => {
+            eprintln!("Harness is not installed/configured:\n");
+            let lines = crate::harness::get_empty_state_message(harness.kind(), status, false);
+            for line in lines {
+                eprintln!("{}", line);
+            }
+            return Err(Error::HarnessNotInstalled);
+        }
+    }
+
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    let path = manager.create_from_current_with_resources(&harness, Some(&harness), &name)?;
+    println!("Created profile from current config: {}", name.as_str());
+    println!("Path: {}", path.display());
+    Ok(())
+}
+
+pub fn delete_profile(harness_name: &str, profile_name: &str) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    manager.delete_profile(&harness, &name)?;
+    println!("Deleted profile: {}", name.as_str());
+    Ok(())
+}
+
+pub fn edit_profile(harness_name: &str, profile_name: &str) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    let profile_path = manager.profile_path(&harness, &name);
+    if !profile_path.exists() {
+        return Err(Error::ProfileNotFound(profile_name.to_string()));
+    }
+
+    let config = crate::config::XenConfig::load().unwrap_or_default();
+    let (program, args) = config.editor_command();
+
+    // On Windows, use cmd /c to invoke the editor so that .cmd/.bat wrappers
+    // (like VS Code's `code.cmd`) are resolved correctly.
+    #[cfg(windows)]
+    let status = std::process::Command::new("cmd")
+        .arg("/c")
+        .arg(&program)
+        .args(&args)
+        .arg(&profile_path)
+        .status()?;
+
+    #[cfg(not(windows))]
+    let status = std::process::Command::new(&program)
+        .args(&args)
+        .arg(&profile_path)
+        .status()?;
+
+    if status.success() {
+        println!("Edited profile: {profile_name}");
+        Ok(())
+    } else {
+        Err(Error::Command(format!(
+            "Editor exited with status: {status}"
+        )))
+    }
+}
+
+pub fn diff_profiles(
+    harness_name: &str,
+    profile_name: &str,
+    other_name: Option<&str>,
+) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    let profile_path = manager.profile_path(&harness, &name);
+    if !profile_path.exists() {
+        return Err(Error::ProfileNotFound(profile_name.to_string()));
+    }
+
+    let other_path = if let Some(other) = other_name {
+        let other_name =
+            ProfileName::new(other).map_err(|_| Error::InvalidProfileName(other.to_string()))?;
+        let path = manager.profile_path(&harness, &other_name);
+        if !path.exists() {
+            return Err(Error::ProfileNotFound(other.to_string()));
+        }
+        path
+    } else {
+        harness.config(&harness_locate::Scope::Global)?
+    };
+
+    let status = std::process::Command::new("diff")
+        .arg("-u")
+        .arg(&profile_path)
+        .arg(&other_path)
+        .status()?;
+
+    match status.code() {
+        Some(0) => println!("No differences"),
+        Some(1) => {}
+        _ => return Err(Error::Command(format!("diff exited with status: {status}"))),
+    }
+    Ok(())
+}
+
+pub fn switch_profile(harness_name: &str, profile_name: &str) -> Result<()> {
+    let harness = resolve_harness(harness_name)?;
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    if !manager.profile_exists(&harness, &name) {
+        return Err(Error::ProfileNotFound(profile_name.to_string()));
+    }
+
+    let harness_id = harness.id();
+
+    match manager.backup_current(&harness) {
+        Ok(backup_path) => {
+            println!("Backed up current config to: {}", backup_path.display());
+        }
+        Err(e) => {
+            println!("Warning: Could not backup current config: {e}");
+        }
+    }
+
+    manager.switch_profile_with_resources(&harness, Some(&harness), &name)?;
+    println!("Switched to profile: {}", name.as_str());
+    println!("Harness: {harness_id}");
+    Ok(())
+}
+
+/// Interactive profile creation wizard.
+pub fn create_profile_interactive(harness_name: &str, profile_name: &str) -> Result<()> {
+    let is_tty = std::io::stdin().is_terminal();
+    if !is_tty {
+        eprintln!("Interactive mode requires a terminal. Use --from-current or create without flags.");
+        return Err(Error::Command("Interactive mode requires a terminal".into()));
+    }
+
+    let harness = resolve_harness(harness_name)?;
+
+    let status = harness
+        .installation_status()
+        .unwrap_or(InstallationStatus::NotInstalled);
+    match status {
+        InstallationStatus::FullyInstalled { .. } => {}
+        _ => {
+            eprintln!("Harness is not installed/configured:\n");
+            let lines = crate::harness::get_empty_state_message(harness.kind(), status, false);
+            for line in lines {
+                eprintln!("{}", line);
+            }
+            return Err(Error::HarnessNotInstalled);
+        }
+    }
+
+    let name = ProfileName::new(profile_name)
+        .map_err(|_| Error::InvalidProfileName(profile_name.to_string()))?;
+    let manager = get_manager()?;
+
+    // Check if profile already exists
+    if manager.profile_exists(&harness, &name) {
+        return Err(Error::ProfileExists(name.as_str().to_string()));
+    }
+
+    // Step 1: For Claude Code, ask about authentication method
+    if harness.kind() == HarnessKind::ClaudeCode {
+        ask_auth_method(&harness)?;
+    }
+
+    // Step 2: Ask about skills/agents selection
+    let source_profile = select_resource_source(&harness, &manager)?;
+
+    // Step 3: Create the profile
+    let path = if let Some(source_name) = source_profile {
+        // Copy resources from selected profile
+        manager.create_from_profile_with_resources(&harness, source_name.as_str(), &name)?
+    } else {
+        // Start fresh - create empty profile
+        manager.create_profile(&harness, &name)?
+    };
+
+    println!("\nCreated profile: {}", name.as_str());
+    println!("Path: {}", path.display());
+
+    // Step 4: Ask if user wants to switch to the new profile
+    let should_switch = dialoguer::Confirm::new()
+        .with_prompt("Switch to this profile now?")
+        .default(true)
+        .interact()?;
+
+    if should_switch {
+        let harness_id = harness.id();
+        match manager.backup_current(&harness) {
+            Ok(backup_path) => {
+                println!("Backed up current config to: {}", backup_path.display());
+            }
+            Err(e) => {
+                println!("Warning: Could not backup current config: {e}");
+            }
+        }
+
+        manager.switch_profile_with_resources(&harness, Some(&harness), &name)?;
+        println!("Switched to profile: {}", name.as_str());
+        println!("Harness: {harness_id}");
+    }
+
+    Ok(())
+}
+
+/// Ask user about Claude Code authentication method.
+fn ask_auth_method(harness: &Harness) -> Result<()> {
+    use dialoguer::{Select, theme::ColorfulTheme};
+
+    let theme = ColorfulTheme::default();
+
+    let selection = Select::with_theme(&theme)
+        .with_prompt("Claude Code Authentication Method")
+        .items(&["API Key", "OAuth (Browser Login)"])
+        .default(0)
+        .interact()?;
+
+    let _config_dir = harness.config_dir()
+        .map_err(|_| Error::Command("Cannot access harness config directory".into()))?;
+
+    match selection {
+        0 => {
+            // API Key
+            println!("\nTo use API Key authentication:");
+            println!("  1. Get your API key from: https://console.anthropic.com/settings/keys");
+            println!("  2. Run: claude-code auth login --api-key");
+            println!("  3. Paste your API key when prompted\n");
+        }
+        1 => {
+            // OAuth
+            println!("\nTo use OAuth authentication:");
+            println!("  1. Run: claude-code auth login");
+            println!("  2. Complete the browser login flow\n");
+        }
+        _ => unreachable!(),
+    }
+
+    Ok(())
+}
+
+/// Select source profile for skills and agents.
+fn select_resource_source(
+    harness: &Harness,
+    manager: &ProfileManager,
+) -> Result<Option<ProfileName>> {
+    use dialoguer::{Select, theme::ColorfulTheme};
+
+    let profiles = manager.list_profiles(harness)?;
+
+    if profiles.is_empty() {
+        println!("\nNo existing profiles found. Starting with a fresh profile.");
+        return Ok(None);
+    }
+
+    let theme = ColorfulTheme::default();
+
+    // Get profile info to show what resources each has
+    let mut profile_descriptions = Vec::new();
+    profile_descriptions.push("Start Fresh (no skills/agents)".to_string());
+
+    let xen_config = XenConfig::load().ok();
+    let active_profile = xen_config.as_ref()
+        .and_then(|c| c.active_profile_for(harness.id()));
+
+    for profile in &profiles {
+        let is_active = active_profile.as_ref()
+            .map(|a| a == &profile.as_str())
+            .unwrap_or(false);
+
+        let mut desc = if is_active {
+            format!("{} (active)", profile.as_str())
+        } else {
+            profile.as_str().to_string()
+        };
+
+        // Try to get profile info to show what resources it has
+        if let Ok(info) = manager.show_profile(harness, profile) {
+            let mut parts = Vec::new();
+            if !info.skills.items.is_empty() {
+                parts.push(format!("{} skills", info.skills.items.len()));
+            }
+            if let Some(agents) = &info.agents {
+                if !agents.items.is_empty() {
+                    parts.push(format!("{} agents", agents.items.len()));
+                }
+            }
+            if !parts.is_empty() {
+                desc.push_str(&format!(" [{}]", parts.join(", ")));
+            }
+        }
+
+        profile_descriptions.push(desc);
+    }
+
+    let selection = Select::with_theme(&theme)
+        .with_prompt("Select skills and agents source")
+        .items(&profile_descriptions)
+        .default(0)
+        .interact()
+        .map_err(|e| Error::Command(format!("Failed to read input: {}", e)))?;
+
+    match selection {
+        0 => Ok(None), // Start fresh
+        idx => Ok(Some(profiles[idx - 1].clone())),
+    }
+}

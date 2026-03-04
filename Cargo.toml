@@ -1,24 +1,24 @@
-[package]
-name = "xen"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.3.0"
 edition = "2024"
-description = "Unified configuration manager for AI coding assistants (Claude Code, OpenCode, Goose, AMP Code)"
 license = "MIT"
-readme = "README.md"
-keywords = ["ai", "cli", "configuration", "tui", "mcp"]
-categories = ["command-line-utilities", "config", "development-tools"]
+repository = "https://github.com/d0/xen"
+homepage = "https://github.com/d0/xen"
 authors = ["d0"]
 
-[dependencies]
-harness-locate = { git = "https://github.com/neiii/harness-barn", branch = "master" }
-skills-locate = { git = "https://github.com/neiii/harness-barn", branch = "master" }
-
+[workspace.dependencies]
+# Internal crates
+harness-locate = { path = "crates/harness-locate" }
+skills-locate = { path = "crates/skills-locate" }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
 dialoguer = "0.11"
 dialoguer-multiselect = "0.13.2"
-
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -33,17 +33,19 @@ color-eyre = "0.6"
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 textwrap = "0.16"
+home = "0.5"
+which = "8"
+url = "2"
+regex = "1"
+ureq = "3"
+zip = "7"
 
 # TUI
 ratatui = "0.29"
 crossterm = "0.28"
 colored = "3.0.0"
 
-[features]
-default = []
-tui-cards = []
-
-[dev-dependencies]
+# Dev dependencies
 tempfile = "3.24.0"
 assert_cmd = "2.0"
 predicates = "3.1"
