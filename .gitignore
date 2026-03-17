@@ -16,3 +16,6 @@ TUI_TESTING.md
 .beads/artifacts/
 .sisyphus
 .docs
+
+# btca local data
+.btca/
