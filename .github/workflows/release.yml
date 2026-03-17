@@ -49,7 +49,7 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --profile dist
+        run: cargo build --target ${{ matrix.target }} --profile dist
 
       - name: Package
         shell: bash
